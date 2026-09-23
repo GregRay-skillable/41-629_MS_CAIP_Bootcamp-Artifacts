@@ -1,0 +1,86 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "suffix": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    }
+  },
+  "variables": {
+    "prefix": "caldova",
+    "keyVaultName": "[format('{0}{1}-kv', variables('prefix'), parameters('suffix'))]",
+    "codeBuildIdentityName": "[format('{0}-code-build-{1}', variables('prefix'), parameters('suffix'))]",
+    "codeDeploymentIdentityName": "[format('{0}-code-deploy-{1}', variables('prefix'), parameters('suffix'))]",
+    "bootstrapTags": {
+      "Application": "Caldova",
+      "Environment": "Lab",
+      "ManagedBy": "Skillable",
+      "Component": "Bootstrap"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('bootstrapTags')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('codeBuildIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('bootstrapTags')]"
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('codeDeploymentIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('bootstrapTags')]"
+    }
+  ],
+  "outputs": {
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "codeBuildIdentityName": {
+      "type": "string",
+      "value": "[variables('codeBuildIdentityName')]"
+    },
+    "codeBuildClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('codeBuildIdentityName')), '2023-01-31').clientId]"
+    },
+    "codeBuildPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('codeBuildIdentityName')), '2023-01-31').principalId]"
+    },
+    "codeDeploymentIdentityName": {
+      "type": "string",
+      "value": "[variables('codeDeploymentIdentityName')]"
+    },
+    "codeDeploymentClientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('codeDeploymentIdentityName')), '2023-01-31').clientId]"
+    },
+    "codeDeploymentPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('codeDeploymentIdentityName')), '2023-01-31').principalId]"
+    }
+  }
+}

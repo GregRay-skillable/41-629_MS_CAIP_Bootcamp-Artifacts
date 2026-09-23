@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "labInstanceId": {
+      "type": "string"
+    },
+    "artifactBaseUrl": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "prefix": "caldova",
+    "suffix": "[take(uniqueString(subscription().subscriptionId, parameters('labInstanceId'), variables('prefix')), 8)]",
+    "artifactBaseUrlWithTrailingSlash": "[if(endsWith(parameters('artifactBaseUrl'), '/'), parameters('artifactBaseUrl'), concat(parameters('artifactBaseUrl'), '/'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "BootstrapRG",
+      "location": "[deployment().location]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "bootstrapDeployment",
+      "location": "[deployment().location]",
+      "resourceGroup": "BootstrapRG",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/resourceGroups', 'BootstrapRG')]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[uri(variables('artifactBaseUrlWithTrailingSlash'), 'bootstrap.json')]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "suffix": {
+            "value": "[variables('suffix')]"
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "suffix": {
+      "type": "string",
+      "value": "[variables('suffix')]"
+    }
+  }
+}
