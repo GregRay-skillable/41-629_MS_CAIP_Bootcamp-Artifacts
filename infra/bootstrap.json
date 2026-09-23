@@ -35,6 +35,7 @@
           "family": "A",
           "name": "standard"
         },
+        "enableRbacAuthorization": true,
         "accessPolicies": []
       }
     },

@@ -15,15 +15,24 @@
   },
   "resources": [
     {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-03-01",
+      "name": "BootstrapRG",
+      "location": "[deployment().location]"
+    },
+    {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2021-04-01",
       "name": "bootstrapDeployment",
       "location": "[deployment().location]",
       "resourceGroup": "BootstrapRG",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/resourceGroups', 'BootstrapRG')]"
+      ],
       "properties": {
         "mode": "Incremental",
         "templateLink": {
-          "uri": "[format('{0}/bootstrap.json', parameters('artifactBaseUrl'))]",
+          "uri": "[uri(parameters('artifactBaseUrl'), 'bootstrap.json')]",
           "contentVersion": "1.0.0.0"
         },
         "parameters": {
