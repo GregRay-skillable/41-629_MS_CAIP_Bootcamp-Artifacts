@@ -1,1 +1,3 @@
-# 41-629_MS_CAIP_Bootcamp-Artifacts
+# Skillable Azure Modernize Bootcamp Artifacts
+
+This repository contains public ARM deployment artifacts used by Skillable for the Azure Modernize Bootcamp Day 2 environment.
