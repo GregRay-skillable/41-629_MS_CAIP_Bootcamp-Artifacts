@@ -1,53 +1,389 @@
 {
-  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
+
   "parameters": {
-    "labInstanceId": {
-      "type": "string"
+    "environmentName": {
+      "type": "string",
+      "metadata": {
+        "description": "Unique Skillable lab instance value used to derive deterministic resource names."
+      }
     },
+
     "artifactBaseUrl": {
-      "type": "string"
+      "type": "string",
+      "defaultValue": "https://raw.githubusercontent.com/GregRay-skillable/41-629_MS_CAIP_Bootcamp-Artifacts/main/infra",
+      "metadata": {
+        "description": "Public base URL containing the linked ARM deployment artifacts."
+      }
+    },
+
+    "bootstrapResourceGroupName": {
+      "type": "string",
+      "defaultValue": "BootstrapRG"
+    },
+
+    "primaryResourceGroupName": {
+      "type": "string",
+      "defaultValue": "PrimaryRG"
+    },
+
+    "secondaryResourceGroupName": {
+      "type": "string",
+      "defaultValue": "SecondaryRG"
+    },
+
+    "globalResourceGroupName": {
+      "type": "string",
+      "defaultValue": "GlobalRG"
+    },
+
+    "primaryLocation": {
+      "type": "string",
+      "defaultValue": "centralus"
+    },
+
+    "secondaryLocation": {
+      "type": "string",
+      "defaultValue": "centralus"
+    },
+
+    "applicationLocation": {
+      "type": "string",
+      "defaultValue": "centralus"
+    },
+
+    "user1ObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Microsoft Entra object ID for the Skillable User1 principal."
+      }
+    },
+
+    "user1Login": {
+      "type": "string",
+      "metadata": {
+        "description": "Microsoft Entra login/UPN for the Skillable User1 principal."
+      }
+    },
+
+    "vmAdminUsername": {
+      "type": "string",
+      "defaultValue": "labadmin"
+    },
+
+    "vmAdminPassword": {
+      "type": "securestring"
     }
   },
+
   "variables": {
     "prefix": "caldova",
-    "suffix": "[take(uniqueString(subscription().subscriptionId, parameters('labInstanceId'), variables('prefix')), 8)]",
-    "artifactBaseUrlWithTrailingSlash": "[if(endsWith(parameters('artifactBaseUrl'), '/'), parameters('artifactBaseUrl'), concat(parameters('artifactBaseUrl'), '/'))]"
+
+    "suffix": "[take(uniqueString(subscription().id, parameters('environmentName'), variables('prefix')), 8)]",
+
+    "tags": {
+      "Application": "Caldova",
+      "Environment": "Lab",
+      "ManagedBy": "Skillable",
+      "SkillableEnvironment": "[parameters('environmentName')]"
+    }
   },
+
   "resources": [
     {
-      "type": "Microsoft.Resources/resourceGroups",
-      "apiVersion": "2024-03-01",
-      "name": "BootstrapRG",
-      "location": "[deployment().location]"
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "bootstrapDeployment",
+      "resourceGroup": "[parameters('bootstrapResourceGroupName')]",
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[format('{0}/bootstrap.json', parameters('artifactBaseUrl'))]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
+          "suffix": {
+            "value": "[variables('suffix')]"
+          },
+          "location": {
+            "value": "[parameters('primaryLocation')]"
+          },
+          "keyVaultAdministratorObjectId": {
+            "value": "[parameters('user1ObjectId')]"
+          },
+          "vmAdminUsername": {
+            "value": "[parameters('vmAdminUsername')]"
+          },
+          "vmAdminPassword": {
+            "value": "[parameters('vmAdminPassword')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        }
+      }
     },
+
     {
       "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2021-04-01",
-      "name": "bootstrapDeployment",
-      "location": "[deployment().location]",
-      "resourceGroup": "BootstrapRG",
+      "apiVersion": "2025-04-01",
+      "name": "primaryDeployment",
+      "resourceGroup": "[parameters('primaryResourceGroupName')]",
       "dependsOn": [
-        "[resourceId('Microsoft.Resources/resourceGroups', 'BootstrapRG')]"
+        "[resourceId(parameters('bootstrapResourceGroupName'), 'Microsoft.Resources/deployments', 'bootstrapDeployment')]"
       ],
       "properties": {
         "mode": "Incremental",
         "templateLink": {
-          "uri": "[uri(variables('artifactBaseUrlWithTrailingSlash'), 'bootstrap.json')]",
+          "uri": "[format('{0}/primary.json', parameters('artifactBaseUrl'))]",
           "contentVersion": "1.0.0.0"
         },
         "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
           "suffix": {
             "value": "[variables('suffix')]"
+          },
+          "location": {
+            "value": "[parameters('primaryLocation')]"
+          },
+          "codeBuildPrincipalId": {
+            "value": "[reference('bootstrapDeployment').outputs.codeBuildPrincipalId.value]"
+          },
+          "vmAdminUsername": {
+            "value": "[parameters('vmAdminUsername')]"
+          },
+          "vmAdminPassword": {
+            "value": "[parameters('vmAdminPassword')]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "secondaryDeployment",
+      "resourceGroup": "[parameters('secondaryResourceGroupName')]",
+      "dependsOn": [
+        "[resourceId(parameters('primaryResourceGroupName'), 'Microsoft.Resources/deployments', 'primaryDeployment')]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[format('{0}/secondary.json', parameters('artifactBaseUrl'))]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
+          "suffix": {
+            "value": "[variables('suffix')]"
+          },
+          "location": {
+            "value": "[parameters('secondaryLocation')]"
+          },
+          "applicationLocation": {
+            "value": "[parameters('applicationLocation')]"
+          },
+          "codeDeploymentPrincipalId": {
+            "value": "[reference('bootstrapDeployment').outputs.codeDeploymentPrincipalId.value]"
+          },
+          "containerRegistryName": {
+            "value": "[reference('primaryDeployment').outputs.containerRegistryName.value]"
+          },
+          "containerRegistryResourceGroupName": {
+            "value": "[parameters('primaryResourceGroupName')]"
+          },
+          "primaryDatabaseResourceGroupName": {
+            "value": "[parameters('primaryResourceGroupName')]"
+          },
+          "primaryDatabaseVnetName": {
+            "value": "[reference('primaryDeployment').outputs.databaseVnetName.value]"
+          },
+          "primaryDatabaseVnetId": {
+            "value": "[reference('primaryDeployment').outputs.databaseVnetId.value]"
+          },
+          "sqlEntraAdminObjectId": {
+            "value": "[parameters('user1ObjectId')]"
+          },
+          "sqlEntraAdminLogin": {
+            "value": "[parameters('user1Login')]"
+          },
+          "sqlEntraAdminPrincipalType": {
+            "value": "User"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
+          }
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "globalDeployment",
+      "resourceGroup": "[parameters('globalResourceGroupName')]",
+      "dependsOn": [
+        "[resourceId(parameters('secondaryResourceGroupName'), 'Microsoft.Resources/deployments', 'secondaryDeployment')]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "templateLink": {
+          "uri": "[format('{0}/global.json', parameters('artifactBaseUrl'))]",
+          "contentVersion": "1.0.0.0"
+        },
+        "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
+          "suffix": {
+            "value": "[variables('suffix')]"
+          },
+          "applicationLocation": {
+            "value": "[parameters('applicationLocation')]"
+          },
+          "codeDeploymentPrincipalId": {
+            "value": "[reference('bootstrapDeployment').outputs.codeDeploymentPrincipalId.value]"
+          },
+          "originFqdn": {
+            "value": "[reference('secondaryDeployment').outputs.containerAppFqdn.value]"
+          },
+          "containerAppsEnvironmentId": {
+            "value": "[reference('secondaryDeployment').outputs.containerAppsEnvironmentId.value]"
+          },
+          "tags": {
+            "value": "[variables('tags')]"
           }
         }
       }
     }
   ],
+
   "outputs": {
+    "bootstrapResourceGroup": {
+      "type": "string",
+      "value": "[parameters('bootstrapResourceGroupName')]"
+    },
+
+    "primaryResourceGroup": {
+      "type": "string",
+      "value": "[parameters('primaryResourceGroupName')]"
+    },
+
+    "secondaryResourceGroup": {
+      "type": "string",
+      "value": "[parameters('secondaryResourceGroupName')]"
+    },
+
+    "globalResourceGroup": {
+      "type": "string",
+      "value": "[parameters('globalResourceGroupName')]"
+    },
+
+    "prefix": {
+      "type": "string",
+      "value": "[variables('prefix')]"
+    },
+
     "suffix": {
       "type": "string",
       "value": "[variables('suffix')]"
+    },
+
+    "databaseMode": {
+      "type": "string",
+      "value": "sqlMi"
+    },
+
+    "databaseFqdn": {
+      "type": "string",
+      "value": "[reference('secondaryDeployment').outputs.databaseFqdn.value]"
+    },
+
+    "databaseName": {
+      "type": "string",
+      "value": "[reference('secondaryDeployment').outputs.databaseName.value]"
+    },
+
+    "keyVaultName": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.keyVaultName.value]"
+    },
+
+    "codeBuildIdentityName": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeBuildIdentityName.value]"
+    },
+
+    "codeBuildClientId": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeBuildClientId.value]"
+    },
+
+    "codeBuildPrincipalId": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeBuildPrincipalId.value]"
+    },
+
+    "codeDeploymentIdentityName": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeDeploymentIdentityName.value]"
+    },
+
+    "codeDeploymentClientId": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeDeploymentClientId.value]"
+    },
+
+    "codeDeploymentPrincipalId": {
+      "type": "string",
+      "value": "[reference('bootstrapDeployment').outputs.codeDeploymentPrincipalId.value]"
+    },
+
+    "containerRegistryName": {
+      "type": "string",
+      "value": "[reference('primaryDeployment').outputs.containerRegistryName.value]"
+    },
+
+    "containerAppName": {
+      "type": "string",
+      "value": "[reference('secondaryDeployment').outputs.containerAppName.value]"
+    },
+
+    "containerAppsEnvironmentId": {
+      "type": "string",
+      "value": "[reference('secondaryDeployment').outputs.containerAppsEnvironmentId.value]"
+    },
+
+    "frontDoorEndpoint": {
+      "type": "string",
+      "value": "[reference('globalDeployment').outputs.frontDoorEndpointHostName.value]"
+    },
+
+    "frontDoorProfileId": {
+      "type": "string",
+      "value": "[reference('globalDeployment').outputs.frontDoorProfileId.value]"
+    },
+
+    "frontDoorOriginId": {
+      "type": "string",
+      "value": "[reference('globalDeployment').outputs.frontDoorOriginId.value]"
+    },
+
+    "frontDoorPrivateLinkRequestMessage": {
+      "type": "string",
+      "value": "[reference('globalDeployment').outputs.privateLinkRequestMessage.value]"
     }
   }
 }
