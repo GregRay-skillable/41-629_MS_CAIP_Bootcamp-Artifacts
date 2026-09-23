@@ -19,13 +19,6 @@
       "type": "string"
     },
 
-    "keyVaultAdministratorObjectId": {
-      "type": "string",
-      "metadata": {
-        "description": "Microsoft Entra object ID for Skillable User1."
-      }
-    },
-
     "vmAdminUsername": {
       "type": "securestring"
     },
@@ -47,9 +40,7 @@
 
     "codeBuildIdentityName": "[format('{0}-code-build-{1}', parameters('prefix'), parameters('suffix'))]",
 
-    "codeDeploymentIdentityName": "[format('{0}-code-deploy-{1}', parameters('prefix'), parameters('suffix'))]",
-
-    "keyVaultSecretsOfficerRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]"
+    "codeDeploymentIdentityName": "[format('{0}-code-deploy-{1}', parameters('prefix'), parameters('suffix'))]"
   },
 
   "resources": [
@@ -109,20 +100,6 @@
       "name": "[variables('codeDeploymentIdentityName')]",
       "location": "[parameters('location')]",
       "tags": "[parameters('tags')]"
-    },
-
-    {
-      "type": "Microsoft.KeyVault/vaults/providers/roleAssignments",
-      "apiVersion": "2022-04-01",
-      "name": "[format('{0}/Microsoft.Authorization/{1}', variables('keyVaultName'), guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), parameters('keyVaultAdministratorObjectId'), variables('keyVaultSecretsOfficerRoleDefinitionId')))]",
-      "properties": {
-        "roleDefinitionId": "[variables('keyVaultSecretsOfficerRoleDefinitionId')]",
-        "principalId": "[parameters('keyVaultAdministratorObjectId')]",
-        "principalType": "User"
-      },
-      "dependsOn": [
-        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
-      ]
     }
   ],
 
