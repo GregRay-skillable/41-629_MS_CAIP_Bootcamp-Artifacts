@@ -1,8 +1,545 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
-  "parameters": {},
-  "variables": {},
-  "resources": [],
-  "outputs": {}
+
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 18
+    },
+
+    "suffix": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 8
+    },
+
+    "location": {
+      "type": "string"
+    },
+
+    "codeBuildPrincipalId": {
+      "type": "string"
+    },
+
+    "vmAdminUsername": {
+      "type": "securestring"
+    },
+
+    "vmAdminPassword": {
+      "type": "securestring"
+    },
+
+    "tags": {
+      "type": "object",
+      "defaultValue": {}
+    }
+  },
+
+  "variables": {
+    "nameToken": "[take(replace(parameters('prefix'), '-', ''), 12)]",
+
+    "databaseVnetName": "[format('{0}-db-primary-{1}-vnet', parameters('prefix'), parameters('suffix'))]",
+
+    "vmNsgName": "[format('{0}-vm-{1}-nsg', parameters('prefix'), parameters('suffix'))]",
+
+    "vmSubnetName": "snet-vms",
+    "privateEndpointSubnetName": "snet-private-endpoints",
+    "dmsSubnetName": "snet-dms",
+    "bastionSubnetName": "AzureBastionSubnet",
+
+    "vmSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('vmSubnetName'))]",
+    "privateEndpointSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('privateEndpointSubnetName'))]",
+    "dmsSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('dmsSubnetName'))]",
+    "bastionSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('bastionSubnetName'))]",
+
+    "registryName": "[toLower(format('{0}cr{1}', variables('nameToken'), parameters('suffix')))]",
+
+    "sourceNicName": "[format('{0}-source-{1}-nic', parameters('prefix'), parameters('suffix'))]",
+    "testNicName": "[format('{0}-test-{1}-nic', parameters('prefix'), parameters('suffix'))]",
+
+    "sourceVmName": "[format('{0}-source-{1}-vm', parameters('prefix'), parameters('suffix'))]",
+    "testVmName": "[format('{0}-test-{1}-vm', parameters('prefix'), parameters('suffix'))]",
+
+    "bastionName": "[format('{0}-{1}-bas', parameters('prefix'), parameters('suffix'))]",
+    "bastionPublicIpName": "[format('{0}-{1}-bas-pip', parameters('prefix'), parameters('suffix'))]",
+
+    "migrationServiceName": "[format('{0}-{1}-dms', parameters('prefix'), parameters('suffix'))]",
+
+    "acrPushRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8311e382-0749-4cb8-b61a-304f252e45ec')]",
+
+    "sourceVmExtraTags": {
+      "WorkloadRole": "source",
+      "OperatingSystem": "Windows"
+    },
+
+    "testVmExtraTags": {
+      "WorkloadRole": "test",
+      "OperatingSystem": "Linux"
+    }
+  },
+
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('vmNsgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowRdpFromBastion",
+            "properties": {
+              "priority": 100,
+              "access": "Allow",
+              "direction": "Inbound",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "10.0.1.0/26",
+              "destinationAddressPrefix": "*"
+            }
+          },
+          {
+            "name": "AllowSshFromBastion",
+            "properties": {
+              "priority": 110,
+              "access": "Allow",
+              "direction": "Inbound",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "10.0.1.0/26",
+              "destinationAddressPrefix": "*"
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('databaseVnetName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.0.0.0/20"
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('databaseVnetName'), variables('bastionSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.0.1.0/26"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('databaseVnetName'), variables('vmSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.0.2.0/24",
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('vmNsgName'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('bastionSubnetName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('vmNsgName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('databaseVnetName'), variables('privateEndpointSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.0.3.0/24",
+        "privateEndpointNetworkPolicies": "Disabled"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('vmSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('databaseVnetName'), variables('dmsSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.0.4.0/24"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('privateEndpointSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('registryName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "dataEndpointEnabled": false,
+        "publicNetworkAccess": "Enabled",
+        "policies": {
+          "quarantinePolicy": {
+            "status": "disabled"
+          },
+          "retentionPolicy": {
+            "days": 7,
+            "status": "disabled"
+          },
+          "trustPolicy": {
+            "type": "Notary",
+            "status": "disabled"
+          }
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.ContainerRegistry/registries/providers/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[format('{0}/Microsoft.Authorization/{1}', variables('registryName'), guid(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), parameters('codeBuildPrincipalId'), variables('acrPushRoleDefinitionId')))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPushRoleDefinitionId')]",
+        "principalId": "[parameters('codeBuildPrincipalId')]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('registryName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('sourceNicName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "enableAcceleratedNetworking": false,
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('vmSubnetId')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('vmSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('testNicName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "enableAcceleratedNetworking": false,
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('vmSubnetId')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('vmSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-07-01",
+      "name": "[variables('sourceVmName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(parameters('tags'), variables('sourceVmExtraTags'))]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "Standard_D2s_v5"
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('sourceNicName'))]",
+              "properties": {
+                "primary": true
+              }
+            }
+          ]
+        },
+        "osProfile": {
+          "computerName": "lab-source",
+          "adminUsername": "[parameters('vmAdminUsername')]",
+          "adminPassword": "[parameters('vmAdminPassword')]",
+          "windowsConfiguration": {
+            "enableAutomaticUpdates": true,
+            "provisionVMAgent": true,
+            "patchSettings": {
+              "assessmentMode": "ImageDefault",
+              "enableHotpatching": false,
+              "patchMode": "AutomaticByOS"
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftSQLServer",
+            "offer": "sql2022-ws2022",
+            "sku": "sqldev-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            }
+          }
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        },
+        "securityProfile": {
+          "securityType": "TrustedLaunch",
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('sourceNicName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-07-01",
+      "name": "[variables('testVmName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(parameters('tags'), variables('testVmExtraTags'))]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "Standard_D2s_v5"
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('testNicName'))]",
+              "properties": {
+                "primary": true
+              }
+            }
+          ]
+        },
+        "osProfile": {
+          "computerName": "lab-test",
+          "adminUsername": "[parameters('vmAdminUsername')]",
+          "adminPassword": "[parameters('vmAdminPassword')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": false,
+            "provisionVMAgent": true,
+            "patchSettings": {
+              "assessmentMode": "AutomaticByPlatform",
+              "patchMode": "AutomaticByPlatform"
+            }
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "0001-com-ubuntu-server-jammy",
+            "sku": "22_04-lts-gen2",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            }
+          }
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        },
+        "securityProfile": {
+          "securityType": "TrustedLaunch",
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('testNicName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('bastionPublicIpName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Regional"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "publicIPAddressVersion": "IPv4"
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/bastionHosts",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('bastionName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "disableCopyPaste": false,
+        "enableFileCopy": false,
+        "enableIpConnect": false,
+        "enableKerberos": false,
+        "enableShareableLink": false,
+        "enableTunneling": false,
+        "scaleUnits": 2,
+        "ipConfigurations": [
+          {
+            "name": "bastion-ip-configuration",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('bastionPublicIpName'))]"
+              },
+              "subnet": {
+                "id": "[variables('bastionSubnetId')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('bastionPublicIpName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('bastionSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.DataMigration/services",
+      "apiVersion": "2025-06-30",
+      "name": "[variables('migrationServiceName')]",
+      "location": "[parameters('location')]",
+      "kind": "Cloud",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "Standard_1vCores",
+        "tier": "Standard",
+        "size": "1 vCores"
+      },
+      "properties": {
+        "virtualSubnetId": "[variables('dmsSubnetId')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('dmsSubnetName'))]"
+      ]
+    }
+  ],
+
+  "outputs": {
+    "containerRegistryName": {
+      "type": "string",
+      "value": "[variables('registryName')]"
+    },
+
+    "containerRegistryLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('registryName')), '2023-07-01').loginServer]"
+    },
+
+    "databaseVnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]"
+    },
+
+    "databaseVnetName": {
+      "type": "string",
+      "value": "[variables('databaseVnetName')]"
+    },
+
+    "virtualMachineNames": {
+      "type": "array",
+      "value": [
+        "[variables('sourceVmName')]",
+        "[variables('testVmName')]"
+      ]
+    },
+
+    "virtualMachineIds": {
+      "type": "array",
+      "value": [
+        "[resourceId('Microsoft.Compute/virtualMachines', variables('sourceVmName'))]",
+        "[resourceId('Microsoft.Compute/virtualMachines', variables('testVmName'))]"
+      ]
+    },
+
+    "virtualMachinePrincipalIds": {
+      "type": "array",
+      "value": [
+        "[reference(resourceId('Microsoft.Compute/virtualMachines', variables('sourceVmName')), '2024-07-01', 'Full').identity.principalId]",
+        "[reference(resourceId('Microsoft.Compute/virtualMachines', variables('testVmName')), '2024-07-01', 'Full').identity.principalId]"
+      ]
+    },
+
+    "migrationServiceName": {
+      "type": "string",
+      "value": "[variables('migrationServiceName')]"
+    }
+  }
 }
