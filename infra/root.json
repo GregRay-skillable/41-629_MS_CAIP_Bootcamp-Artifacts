@@ -3,10 +3,16 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "labInstanceId": {
-      "type": "string"
+      "type": "string",
+      "metadata": {
+        "description": "Unique identifier for the lab instance used to derive deployment suffixes."
+      }
     },
     "artifactBaseUrl": {
-      "type": "string"
+      "type": "string",
+      "metadata": {
+        "description": "Base URL hosting the public ARM templates, with or without a trailing slash."
+      }
     }
   },
   "variables": {
@@ -26,7 +32,7 @@
       "apiVersion": "2021-04-01",
       "name": "bootstrapDeployment",
       "location": "[deployment().location]",
-      "resourceGroup": "BootstrapRG",
+      "scope": "[resourceId('Microsoft.Resources/resourceGroups', 'BootstrapRG')]",
       "dependsOn": [
         "[resourceId('Microsoft.Resources/resourceGroups', 'BootstrapRG')]"
       ],
