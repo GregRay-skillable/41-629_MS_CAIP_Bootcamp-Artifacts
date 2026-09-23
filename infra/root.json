@@ -11,7 +11,8 @@
   },
   "variables": {
     "prefix": "caldova",
-    "suffix": "[take(uniqueString(subscription().subscriptionId, parameters('labInstanceId'), variables('prefix')), 8)]"
+    "suffix": "[take(uniqueString(subscription().subscriptionId, parameters('labInstanceId'), variables('prefix')), 8)]",
+    "artifactBaseUrlWithTrailingSlash": "[if(endsWith(parameters('artifactBaseUrl'), '/'), parameters('artifactBaseUrl'), concat(parameters('artifactBaseUrl'), '/'))]"
   },
   "resources": [
     {
@@ -32,7 +33,7 @@
       "properties": {
         "mode": "Incremental",
         "templateLink": {
-          "uri": "[uri(parameters('artifactBaseUrl'), 'bootstrap.json')]",
+          "uri": "[uri(variables('artifactBaseUrlWithTrailingSlash'), 'bootstrap.json')]",
           "contentVersion": "1.0.0.0"
         },
         "parameters": {
