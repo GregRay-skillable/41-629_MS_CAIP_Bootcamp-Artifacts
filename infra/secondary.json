@@ -1,8 +1,852 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
-  "parameters": {},
-  "variables": {},
-  "resources": [],
-  "outputs": {}
+
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 18
+    },
+
+    "suffix": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 8
+    },
+
+    "location": {
+      "type": "string"
+    },
+
+    "applicationLocation": {
+      "type": "string"
+    },
+
+    "codeDeploymentPrincipalId": {
+      "type": "string"
+    },
+
+    "containerRegistryName": {
+      "type": "string"
+    },
+
+    "containerRegistryResourceGroupName": {
+      "type": "string"
+    },
+
+    "primaryDatabaseResourceGroupName": {
+      "type": "string"
+    },
+
+    "primaryDatabaseVnetName": {
+      "type": "string"
+    },
+
+    "primaryDatabaseVnetId": {
+      "type": "string"
+    },
+
+    "sqlEntraAdminObjectId": {
+      "type": "string"
+    },
+
+    "sqlEntraAdminLogin": {
+      "type": "string"
+    },
+
+    "sqlEntraAdminPrincipalType": {
+      "type": "string",
+      "defaultValue": "User",
+      "allowedValues": [
+        "User",
+        "Group",
+        "Application"
+      ]
+    },
+
+    "tags": {
+      "type": "object",
+      "defaultValue": {}
+    }
+  },
+
+  "variables": {
+    "nameToken": "[take(replace(parameters('prefix'), '-', ''), 12)]",
+
+    "databaseVnetName": "[format('{0}-db-secondary-{1}-vnet', parameters('prefix'), parameters('suffix'))]",
+
+    "applicationVnetName": "[format('{0}-app-secondary-{1}-vnet', parameters('prefix'), parameters('suffix'))]",
+
+    "managedInstanceNsgName": "[format('{0}-sqlmi-{1}-nsg', parameters('prefix'), parameters('suffix'))]",
+
+    "managedInstanceRouteTableName": "[format('{0}-sqlmi-{1}-rt', parameters('prefix'), parameters('suffix'))]",
+
+    "managedInstanceSubnetName": "snet-sqlmi",
+
+    "containerAppsSubnetName": "snet-container-apps",
+
+    "managedInstanceSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('managedInstanceSubnetName'))]",
+
+    "containerAppsSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('applicationVnetName'), variables('containerAppsSubnetName'))]",
+
+    "logAnalyticsName": "[format('{0}-application-{1}-log', parameters('prefix'), parameters('suffix'))]",
+
+    "containerAppsEnvironmentName": "[format('{0}-application-{1}-cae', variables('nameToken'), parameters('suffix'))]",
+
+    "containerAppName": "[format('{0}-{1}-app', take(toLower(variables('nameToken')), 18), parameters('suffix'))]",
+
+    "managedInstanceName": "[toLower(format('{0}mi{1}', variables('nameToken'), parameters('suffix')))]",
+
+    "databaseName": "eShop",
+
+    "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+
+    "containerAppsContributorRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b998-42bd-ab17-a7e34c199c0f')]"
+  },
+
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('managedInstanceNsgName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowSqlFromVirtualNetwork",
+            "properties": {
+              "priority": 1000,
+              "access": "Allow",
+              "direction": "Inbound",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "1433",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork"
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/routeTables",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('managedInstanceRouteTableName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "disableBgpRoutePropagation": false,
+        "routes": []
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('databaseVnetName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.1.0.0/20"
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('databaseVnetName'), variables('managedInstanceSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.1.5.0/24",
+
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('managedInstanceNsgName'))]"
+        },
+
+        "routeTable": {
+          "id": "[resourceId('Microsoft.Network/routeTables', variables('managedInstanceRouteTableName'))]"
+        },
+
+        "delegations": [
+          {
+            "name": "managed-instance",
+            "properties": {
+              "serviceName": "Microsoft.Sql/managedInstances"
+            }
+          }
+        ]
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]",
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('managedInstanceNsgName'))]",
+        "[resourceId('Microsoft.Network/routeTables', variables('managedInstanceRouteTableName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2024-05-01",
+      "name": "[variables('applicationVnetName')]",
+      "location": "[parameters('applicationLocation')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.20.0.0/20"
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/subnets",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/{1}', variables('applicationVnetName'), variables('containerAppsSubnetName'))]",
+      "properties": {
+        "addressPrefix": "10.20.0.0/23",
+
+        "delegations": [
+          {
+            "name": "container-apps",
+            "properties": {
+              "serviceName": "Microsoft.App/environments"
+            }
+          }
+        ]
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('applicationVnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/app-to-database', variables('applicationVnetName'))]",
+
+      "properties": {
+        "remoteVirtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]"
+        },
+
+        "allowVirtualNetworkAccess": true,
+        "allowForwardedTraffic": false,
+        "allowGatewayTransit": false,
+        "useRemoteGateways": false
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('managedInstanceSubnetName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('applicationVnetName'), variables('containerAppsSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/database-to-app', variables('databaseVnetName'))]",
+
+      "properties": {
+        "remoteVirtualNetwork": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworks', variables('applicationVnetName'))]"
+        },
+
+        "allowVirtualNetworkAccess": true,
+        "allowForwardedTraffic": false,
+        "allowGatewayTransit": false,
+        "useRemoteGateways": false
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', variables('applicationVnetName'), 'app-to-database')]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/application-to-primary-database', variables('applicationVnetName'))]",
+
+      "properties": {
+        "remoteVirtualNetwork": {
+          "id": "[parameters('primaryDatabaseVnetId')]"
+        },
+
+        "allowVirtualNetworkAccess": true,
+        "allowForwardedTraffic": false,
+        "allowGatewayTransit": false,
+        "useRemoteGateways": false
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', variables('databaseVnetName'), 'database-to-app')]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "primaryDatabaseToApplicationPeering",
+      "resourceGroup": "[parameters('primaryDatabaseResourceGroupName')]",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', variables('applicationVnetName'), 'application-to-primary-database')]"
+      ],
+
+      "properties": {
+        "mode": "Incremental",
+
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+
+        "parameters": {
+          "localVnetName": {
+            "value": "[parameters('primaryDatabaseVnetName')]"
+          },
+
+          "remoteVnetId": {
+            "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('applicationVnetName'))]"
+          },
+
+          "peeringName": {
+            "value": "primary-database-to-application"
+          }
+        },
+
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+
+          "parameters": {
+            "localVnetName": {
+              "type": "string"
+            },
+
+            "remoteVnetId": {
+              "type": "string"
+            },
+
+            "peeringName": {
+              "type": "string"
+            }
+          },
+
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
+
+              "properties": {
+                "remoteVirtualNetwork": {
+                  "id": "[parameters('remoteVnetId')]"
+                },
+
+                "allowVirtualNetworkAccess": true,
+                "allowForwardedTraffic": false,
+                "allowGatewayTransit": false,
+                "useRemoteGateways": false
+              }
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "primaryToSecondaryDatabasePeering",
+      "resourceGroup": "[parameters('primaryDatabaseResourceGroupName')]",
+
+      "dependsOn": [
+        "[resourceId(parameters('primaryDatabaseResourceGroupName'), 'Microsoft.Resources/deployments', 'primaryDatabaseToApplicationPeering')]"
+      ],
+
+      "properties": {
+        "mode": "Incremental",
+
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+
+        "parameters": {
+          "localVnetName": {
+            "value": "[parameters('primaryDatabaseVnetName')]"
+          },
+
+          "remoteVnetId": {
+            "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]"
+          },
+
+          "peeringName": {
+            "value": "primary-to-secondary"
+          }
+        },
+
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+
+          "parameters": {
+            "localVnetName": {
+              "type": "string"
+            },
+
+            "remoteVnetId": {
+              "type": "string"
+            },
+
+            "peeringName": {
+              "type": "string"
+            }
+          },
+
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
+
+              "properties": {
+                "remoteVirtualNetwork": {
+                  "id": "[parameters('remoteVnetId')]"
+                },
+
+                "allowVirtualNetworkAccess": true,
+                "allowForwardedTraffic": false,
+                "allowGatewayTransit": false,
+                "useRemoteGateways": false
+              }
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+      "apiVersion": "2024-05-01",
+      "name": "[format('{0}/secondary-to-primary', variables('databaseVnetName'))]",
+
+      "properties": {
+        "remoteVirtualNetwork": {
+          "id": "[parameters('primaryDatabaseVnetId')]"
+        },
+
+        "allowVirtualNetworkAccess": true,
+        "allowForwardedTraffic": false,
+        "allowGatewayTransit": false,
+        "useRemoteGateways": false
+      },
+
+      "dependsOn": [
+        "[resourceId(parameters('primaryDatabaseResourceGroupName'), 'Microsoft.Resources/deployments', 'primaryToSecondaryDatabasePeering')]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('logAnalyticsName')]",
+      "location": "[parameters('applicationLocation')]",
+      "tags": "[parameters('tags')]",
+
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+
+        "retentionInDays": 30,
+
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2025-01-01",
+      "name": "[variables('containerAppsEnvironmentName')]",
+      "location": "[parameters('applicationLocation')]",
+      "tags": "[parameters('tags')]",
+
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').customerId]",
+
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName')), '2023-09-01').primarySharedKey]"
+          }
+        },
+
+        "vnetConfiguration": {
+          "infrastructureSubnetId": "[variables('containerAppsSubnetId')]",
+          "internal": true
+        },
+
+        "workloadProfiles": [
+          {
+            "name": "Consumption",
+            "workloadProfileType": "Consumption"
+          }
+        ],
+
+        "zoneRedundant": true
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', variables('databaseVnetName'), 'secondary-to-primary')]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('containerAppName')]",
+      "location": "[parameters('applicationLocation')]",
+      "tags": "[parameters('tags')]",
+
+      "identity": {
+        "type": "SystemAssigned"
+      },
+
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvironmentName'))]",
+
+        "workloadProfileName": "Consumption",
+
+        "configuration": {
+          "activeRevisionsMode": "Single",
+
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "allowInsecure": false,
+
+            "traffic": [
+              {
+                "latestRevision": true,
+                "weight": 100
+              }
+            ]
+          }
+        },
+
+        "template": {
+          "containers": [
+            {
+              "name": "placeholder",
+              "image": "mcr.microsoft.com/dotnet/samples:aspnetapp",
+
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              },
+
+              "probes": [
+                {
+                  "type": "Startup",
+
+                  "httpGet": {
+                    "path": "/",
+                    "port": 8080
+                  },
+
+                  "initialDelaySeconds": 1,
+                  "periodSeconds": 3,
+                  "failureThreshold": 30
+                },
+
+                {
+                  "type": "Liveness",
+
+                  "httpGet": {
+                    "path": "/",
+                    "port": 8080
+                  },
+
+                  "periodSeconds": 10,
+                  "failureThreshold": 3
+                },
+
+                {
+                  "type": "Readiness",
+
+                  "httpGet": {
+                    "path": "/",
+                    "port": 8080
+                  },
+
+                  "periodSeconds": 5,
+                  "failureThreshold": 3
+                }
+              ]
+            }
+          ],
+
+          "scale": {
+            "minReplicas": 2,
+            "maxReplicas": 10,
+
+            "rules": [
+              {
+                "name": "http-concurrency",
+
+                "http": {
+                  "metadata": {
+                    "concurrentRequests": "50"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvironmentName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "containerAppAcrPullAssignment",
+      "resourceGroup": "[parameters('containerRegistryResourceGroupName')]",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]"
+      ],
+
+      "properties": {
+        "mode": "Incremental",
+
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+
+        "parameters": {
+          "containerRegistryName": {
+            "value": "[parameters('containerRegistryName')]"
+          },
+
+          "principalId": {
+            "value": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2024-03-01', 'Full').identity.principalId]"
+          },
+
+          "roleDefinitionId": {
+            "value": "[variables('acrPullRoleDefinitionId')]"
+          }
+        },
+
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+
+          "parameters": {
+            "containerRegistryName": {
+              "type": "string"
+            },
+
+            "principalId": {
+              "type": "string"
+            },
+
+            "roleDefinitionId": {
+              "type": "string"
+            }
+          },
+
+          "resources": [
+            {
+              "type": "Microsoft.ContainerRegistry/registries/providers/roleAssignments",
+              "apiVersion": "2022-04-01",
+
+              "name": "[format('{0}/Microsoft.Authorization/{1}', parameters('containerRegistryName'), guid(resourceId('Microsoft.ContainerRegistry/registries', parameters('containerRegistryName')), parameters('principalId'), parameters('roleDefinitionId')))]",
+
+              "properties": {
+                "roleDefinitionId": "[parameters('roleDefinitionId')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.App/containerApps/providers/roleAssignments",
+      "apiVersion": "2022-04-01",
+
+      "name": "[format('{0}/Microsoft.Authorization/{1}', variables('containerAppName'), guid(resourceId('Microsoft.App/containerApps', variables('containerAppName')), parameters('codeDeploymentPrincipalId'), variables('containerAppsContributorRoleDefinitionId')))]",
+
+      "properties": {
+        "roleDefinitionId": "[variables('containerAppsContributorRoleDefinitionId')]",
+        "principalId": "[parameters('codeDeploymentPrincipalId')]",
+        "principalType": "ServicePrincipal"
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', variables('containerAppName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Sql/managedInstances",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('managedInstanceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+
+      "identity": {
+        "type": "SystemAssigned"
+      },
+
+      "sku": {
+        "name": "GP_Gen5",
+        "tier": "GeneralPurpose",
+        "family": "Gen5",
+        "capacity": 4
+      },
+
+      "properties": {
+        "administrators": {
+          "administratorType": "ActiveDirectory",
+          "azureADOnlyAuthentication": true,
+          "login": "[parameters('sqlEntraAdminLogin')]",
+          "principalType": "[parameters('sqlEntraAdminPrincipalType')]",
+          "sid": "[parameters('sqlEntraAdminObjectId')]",
+          "tenantId": "[subscription().tenantId]"
+        },
+
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+
+        "licenseType": "BasePrice",
+
+        "managedInstanceCreateMode": "Default",
+
+        "minimalTlsVersion": "1.2",
+
+        "proxyOverride": "Redirect",
+
+        "publicDataEndpointEnabled": false,
+
+        "requestedBackupStorageRedundancy": "Local",
+
+        "subnetId": "[variables('managedInstanceSubnetId')]",
+
+        "timezoneId": "UTC",
+
+        "vCores": 4,
+
+        "storageSizeInGB": 32
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('databaseVnetName'), variables('managedInstanceSubnetName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Sql/managedInstances/databases",
+      "apiVersion": "2023-08-01",
+
+      "name": "[format('{0}/{1}', variables('managedInstanceName'), variables('databaseName'))]",
+
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+
+      "properties": {
+        "catalogCollation": "DATABASE_DEFAULT",
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "createMode": "Default"
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/managedInstances', variables('managedInstanceName'))]"
+      ]
+    }
+  ],
+
+  "outputs": {
+    "containerAppName": {
+      "type": "string",
+      "value": "[variables('containerAppName')]"
+    },
+
+    "containerAppFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', variables('containerAppName')), '2024-03-01').configuration.ingress.fqdn]"
+    },
+
+    "containerAppsEnvironmentId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.App/managedEnvironments', variables('containerAppsEnvironmentName'))]"
+    },
+
+    "containerAppsEnvironmentName": {
+      "type": "string",
+      "value": "[variables('containerAppsEnvironmentName')]"
+    },
+
+    "applicationVnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('applicationVnetName'))]"
+    },
+
+    "applicationVnetName": {
+      "type": "string",
+      "value": "[variables('applicationVnetName')]"
+    },
+
+    "databaseVnetId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Network/virtualNetworks', variables('databaseVnetName'))]"
+    },
+
+    "databaseVnetName": {
+      "type": "string",
+      "value": "[variables('databaseVnetName')]"
+    },
+
+    "managedInstanceSubnetId": {
+      "type": "string",
+      "value": "[variables('managedInstanceSubnetId')]"
+    },
+
+    "managedInstanceName": {
+      "type": "string",
+      "value": "[variables('managedInstanceName')]"
+    },
+
+    "databaseFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Sql/managedInstances', variables('managedInstanceName')), '2023-08-01').fullyQualifiedDomainName]"
+    },
+
+    "databaseName": {
+      "type": "string",
+      "value": "[variables('databaseName')]"
+    },
+
+    "databaseType": {
+      "type": "string",
+      "value": "sqlMi"
+    }
+  }
 }
