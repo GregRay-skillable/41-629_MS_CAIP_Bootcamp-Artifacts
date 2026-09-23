@@ -1,8 +1,242 @@
 {
   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
   "contentVersion": "1.0.0.0",
-  "parameters": {},
-  "variables": {},
-  "resources": [],
-  "outputs": {}
+
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 18
+    },
+
+    "suffix": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 8
+    },
+
+    "applicationLocation": {
+      "type": "string"
+    },
+
+    "codeDeploymentPrincipalId": {
+      "type": "string"
+    },
+
+    "originFqdn": {
+      "type": "string"
+    },
+
+    "containerAppsEnvironmentId": {
+      "type": "string"
+    },
+
+    "tags": {
+      "type": "object",
+      "defaultValue": {}
+    }
+  },
+
+  "variables": {
+    "nameToken": "[take(replace(parameters('prefix'), '-', ''), 12)]",
+
+    "profileName": "[format('{0}-{1}-afd', parameters('prefix'), parameters('suffix'))]",
+
+    "endpointName": "[format('{0}-{1}', variables('nameToken'), parameters('suffix'))]",
+
+    "originGroupName": "regional-apps",
+
+    "originName": "application",
+
+    "routeName": "default",
+
+    "privateLinkRequestMessage": "[format('Caldova Front Door origin {0}/{1}/application', variables('profileName'), variables('endpointName'))]",
+
+    "readerRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')]"
+  },
+
+  "resources": [
+    {
+      "type": "Microsoft.Cdn/profiles",
+      "apiVersion": "2024-02-01",
+      "name": "[variables('profileName')]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+
+      "sku": {
+        "name": "Premium_AzureFrontDoor"
+      },
+
+      "properties": {
+        "originResponseTimeoutSeconds": 60
+      }
+    },
+
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints",
+      "apiVersion": "2024-02-01",
+
+      "name": "[format('{0}/{1}', variables('profileName'), variables('endpointName'))]",
+
+      "location": "global",
+      "tags": "[parameters('tags')]",
+
+      "properties": {
+        "enabledState": "Enabled"
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups",
+      "apiVersion": "2024-02-01",
+
+      "name": "[format('{0}/{1}', variables('profileName'), variables('originGroupName'))]",
+
+      "properties": {
+        "healthProbeSettings": {
+          "probeIntervalInSeconds": 30,
+          "probePath": "/",
+          "probeProtocol": "Https",
+          "probeRequestType": "HEAD"
+        },
+
+        "loadBalancingSettings": {
+          "additionalLatencyInMilliseconds": 50,
+          "sampleSize": 4,
+          "successfulSamplesRequired": 3
+        },
+
+        "sessionAffinityState": "Disabled"
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Cdn/profiles/originGroups/origins",
+      "apiVersion": "2024-02-01",
+
+      "name": "[format('{0}/{1}/{2}', variables('profileName'), variables('originGroupName'), variables('originName'))]",
+
+      "properties": {
+        "enabledState": "Enabled",
+
+        "enforceCertificateNameCheck": true,
+
+        "hostName": "[parameters('originFqdn')]",
+
+        "httpPort": 80,
+
+        "httpsPort": 443,
+
+        "originHostHeader": "[parameters('originFqdn')]",
+
+        "priority": 1,
+
+        "sharedPrivateLinkResource": {
+          "groupId": "managedEnvironments",
+
+          "privateLink": {
+            "id": "[parameters('containerAppsEnvironmentId')]"
+          },
+
+          "privateLinkLocation": "[parameters('applicationLocation')]",
+
+          "requestMessage": "[variables('privateLinkRequestMessage')]"
+        },
+
+        "weight": 1000
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), variables('originGroupName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+      "apiVersion": "2024-02-01",
+
+      "name": "[format('{0}/{1}/{2}', variables('profileName'), variables('endpointName'), variables('routeName'))]",
+
+      "properties": {
+        "enabledState": "Enabled",
+
+        "forwardingProtocol": "HttpsOnly",
+
+        "httpsRedirect": "Enabled",
+
+        "linkToDefaultDomain": "Enabled",
+
+        "originGroup": {
+          "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), variables('originGroupName'))]"
+        },
+
+        "patternsToMatch": [
+          "/*"
+        ],
+
+        "supportedProtocols": [
+          "Http",
+          "Https"
+        ]
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName'))]",
+        "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('profileName'), variables('originGroupName'), variables('originName'))]"
+      ]
+    },
+
+    {
+      "type": "Microsoft.Cdn/profiles/providers/roleAssignments",
+      "apiVersion": "2022-04-01",
+
+      "name": "[format('{0}/Microsoft.Authorization/{1}', variables('profileName'), guid(resourceId('Microsoft.Cdn/profiles', variables('profileName')), parameters('codeDeploymentPrincipalId'), variables('readerRoleDefinitionId')))]",
+
+      "properties": {
+        "roleDefinitionId": "[variables('readerRoleDefinitionId')]",
+
+        "principalId": "[parameters('codeDeploymentPrincipalId')]",
+
+        "principalType": "ServicePrincipal"
+      },
+
+      "dependsOn": [
+        "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+      ]
+    }
+  ],
+
+  "outputs": {
+    "frontDoorEndpointHostName": {
+      "type": "string",
+
+      "value": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName')), '2024-02-01').hostName]"
+    },
+
+    "frontDoorProfileId": {
+      "type": "string",
+
+      "value": "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+    },
+
+    "frontDoorOriginId": {
+      "type": "string",
+
+      "value": "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('profileName'), variables('originGroupName'), variables('originName'))]"
+    },
+
+    "privateLinkRequestMessage": {
+      "type": "string",
+
+      "value": "[variables('privateLinkRequestMessage')]"
+    }
+  }
 }
